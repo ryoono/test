@@ -1,0 +1,84 @@
+[
+    {
+        "name": "version",
+        "widget_type": "Entry",
+        "default": "1"
+    },
+    {
+        "name": "aoxMode",
+        "widget_type": "Combobox",
+        "values": ["SL_RTL_AOX_MODE_REAL_TIME_BASIC"]
+    },
+    {
+        "name": "antennaMode",
+        "widget_type": "Combobox",
+        "values": ["SL_RTL_AOX_ARRAY_TYPE_4x4_DP_URA"]
+    },
+    {
+        "name": "antennaArray",
+        "widget_type": "Entry",
+        "default": "[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]"
+    },
+    {
+        "name": "angleFiltering",
+        "widget_type": "Combobox",
+        "values": ["true", "false"],
+        "default": "false"
+    },
+    {
+        "name": "angleFilteringWeight",
+        "widget_type": "Entry",
+        "default": "0.6"
+    },
+    {
+        "name": "angleCorrectionTimeout",
+        "widget_type": "Entry",
+        "default": "5"
+    },
+    {
+        "name": "angleCorrectionDelay",
+        "widget_type": "Entry",
+        "default": "3"
+    },
+    {
+        "name": "cteMode",
+        "widget_type": "Combobox",
+        "values": ["CONN", "CONN_LESS", "SILABS"]
+    },
+    {
+        "name": "cteSamplingInterval",
+        "widget_type": "Entry",
+        "default": "3"
+    },
+    {
+        "name": "cteLength",
+        "widget_type": "Entry",
+        "default": "20"
+    },
+    {
+        "name": "slotDuration",
+        "widget_type": "Entry",
+        "default": "1"
+    },
+    {
+        "name": "reportMode",
+        "widget_type": "Combobox",
+        "values": ["ANGLE", "IQREPORT"],
+        "default": "ANGLE"
+    },
+    {
+        "name": "allowlist",
+        "widget_type": "Entry",
+        "default": "[]"
+    },
+    {
+        "name": "azimuthMask",
+        "widget_type": "Entry",
+        "default": "[]"
+    },
+    {
+        "name": "elevationMask",
+        "widget_type": "Entry",
+        "default": "[]"
+    }
+]
