@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>エスカレーター機能設定アプリ</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #ffffff;
+            position: relative;
+            overflow: auto;
+        }
+        .background-shapes {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: -1;
+            pointer-events: none;
+        }
+        .background-shapes .shape {
+            position: absolute;
+            background-color: rgba(141, 206, 19, 0.329);
+            border-radius: 50%;
+        }
+        .background-shapes .shape.square {
+            border-radius: 0;
+        }
+        .shape1 {
+            width: 200px;
+            height: 200px;
+            top: -100px;
+            left: -100px;
+        }
+        .shape2 {
+            width: 500px;
+            height: 500px;
+            bottom: 50px;
+            left: -150px;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            position: relative;
+            z-index: 1;
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        .button-container {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 20px;
+        }
+        .button-container a,
+        .button-container button {
+            padding: 10px 20px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            text-decoration: none;
+            margin: 0 10px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            border: 1px solid #eee;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+    </style>
+    <script>
+    let currentState = "エス1状態表示"; // または "エス2状態表示"
+    let es1Data = null;
+    let es2Data = null;
+
+    function toggleState() {
+        const titleElement = document.getElementById("title");
+        const toggleBtn = document.getElementById("toggleBtn");
+        if (currentState === "エス1状態表示") {
+            currentState = "エス2状態表示";
+            toggleBtn.textContent = "エス1状態表示";
+        } else {
+            currentState = "エス1状態表示";
+            toggleBtn.textContent = "エス2状態表示";
+        }
+        titleElement.textContent = currentState;
+        render();
+    }
+
+    const WebSocketUrl = window.location.href.replace("http", "ws").slice(0, -1) + ":81";
+    const socket = new WebSocket(WebSocketUrl);
+    // ▼追加：open時（接続確立時）に購読申告を送る
+    socket.addEventListener('open', () => {
+        socket.send('SUB:INDEX');
+    });
+
+    const labels = [
+        "ステップ速度：",
+        "右手摺速度：",
+        "左手摺速度：",
+        "自動運転設定：",
+        "AAN設定：",
+        "照明設定：",
+        "上部左Cセンサ検出：",
+        "上部右Cセンサ検出：",
+        "下部左Cセンサ検出：",
+        "下部右Cセンサ検出：",
+        "上部左Aセンサ検出：",
+        "下部右Aセンサ検出：",
+        "上部左Bセンサ検出：",
+        "上部右Bセンサ検出：",
+        "下部左Bセンサ検出：",
+        "下部右Bセンサ検出：",
+        "エラー数：",
+        "エラー詳細："
+    ];
+
+    function convertData(label, value) {
+        switch (label) {
+            case "ステップ速度：":
+            case "右手摺速度：":
+            case "左手摺速度：":
+                return `${(Number(value) / 100).toFixed(2)} [m/min]`;
+            case "自動運転設定：":
+                return value === "0" ? "NULL" : value === "1" ? "手動" : "自動";
+            case "AAN設定：":
+                return value === "0" ? "無効" : "有効";
+            case "照明設定：":
+                return value === "0" ? "無効" : value === "1" ? "有効" : "連動";
+            case "上部左Cセンサ検出：":
+            case "上部右Cセンサ検出：":
+            case "下部左Cセンサ検出：":
+            case "下部右Cセンサ検出：":
+            case "上部左Aセンサ検出：":
+            case "下部右Aセンサ検出：":
+            case "上部左Bセンサ検出：":
+            case "上部右Bセンサ検出：":
+            case "下部左Bセンサ検出：":
+            case "下部右Bセンサ検出：":
+                return value === "0" ? "検出" : "-";
+            default:
+                return value;
+        }
+    }
+
+    function render() {
+        const dataArea = document.getElementById("data");
+        const target = (currentState === "エス1状態表示") ? es1Data : es2Data;
+
+        const isPlaceholder = !target || target.length < 18;
+        const viewData = isPlaceholder ? Array(18).fill("") : target;
+
+        // テーブル描画（未受信でも必ず枠＋ラベルを表示。値は空欄）
+        let topNote = isPlaceholder ? `<p style="margin:6px 0;color:#666;">データ受信待ち…</p>` : "";
+        let displayData = "<table><tbody>";
+
+        for (let i = 0; i < 18; i++) {
+            const label = labels[i];
+            const val = viewData[i] ?? "";
+
+            if (label === "エラー詳細：") {
+                if (isPlaceholder) {
+                    // 未受信時はラベル行のみ、値は空欄
+                    displayData += `<tr><td>${label}</td><td></td></tr>`;
+                } else {
+                    // 受信済みは3桁ずつ展開
+                    const errorStr = val || "";
+                    if (!errorStr.length) {
+                        displayData += `<tr><td>${label}</td><td></td></tr>`;
+                    } else {
+                        for (let j = 0; j < errorStr.length; j += 3) {
+                            const detail = errorStr.substring(j, j + 3);
+                            displayData += `<tr><td>エラーコード詳細${(j / 3) + 1}:</td><td>${detail}</td></tr>`;
+                        }
+                    }
+                }
+            } else {
+                const shown = isPlaceholder ? "" : convertData(label, val);
+                displayData += `<tr><td>${label}</td><td>${shown}</td></tr>`;
+            }
+        }
+        displayData += "</tbody></table>";
+
+        dataArea.innerHTML = topNote + displayData;
+    }
+
+    socket.onmessage = (event) => {
+        // 受信は「エス1(18フィールド) + （あれば）エス2(18フィールド)」の順で同一メッセージ
+        const arr = event.data.split(",");
+
+        if (arr.length >= 18) es1Data = arr.slice(0, 18);
+        if (arr.length >= 36) es2Data = arr.slice(18, 36);
+        else es2Data = null;
+
+        render();
+    };
+
+    // 初期表示（未受信でも枠を出す）
+    window.addEventListener("DOMContentLoaded", render);
+</script>
+
+</head>
+<body>
+    <div class="background-shapes">
+        <div class="shape shape1"></div>
+        <div class="shape shape2"></div>
+    </div>
+    <div class="container">
+        <h1 id="title">エス1状態表示</h1>
+        <div class="button-container">
+            <!-- ボタン文言はトグルで入れ替える -->
+            <button id="toggleBtn" onclick="toggleState()">エス2状態表示</button>
+            <a href="http://192.168.4.1/config">エス機能設定</a>
+        </div>
+        <div id="data"><p>データ受信待ち…</p></div>
+    </div>
+</body>
+</html>
