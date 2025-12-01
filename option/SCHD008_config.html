@@ -29,6 +29,14 @@
     .button-container a, .button-container button {
       padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer; text-decoration: none;
     }
+    /* Explicit classes for start button to ensure coloring even when disabled */
+    .start-enabled { background-color: #4CAF50 !important; color: white; }
+    .start-disabled { background-color: #9E9E9E !important; color: white; }
+    .debug-hidden { display: none; }
+    .debug-visible { display: block; }
+    /* Blink effect to show updates */
+    .blink { animation: blinkAnim 300ms ease; }
+    @keyframes blinkAnim { 0% { box-shadow: 0 0 0 rgba(0,0,0,0); } 50% { box-shadow: 0 0 10px rgba(76,175,80,0.6); } 100% { box-shadow: 0 0 0 rgba(0,0,0,0); } }
     .subtle { color:#666; font-size: 0.9em; text-align:center; margin-top:-8px; margin-bottom:12px; }
   </style>
 </head>
@@ -40,6 +48,14 @@
   <div class="container">
     <h1 id="title">エス1 機能設定</h1>
     <p class="subtle" id="whichHint">現在: エス1 を編集中（ボタンで切替できます）</p>
+    <!-- Debug panel (hidden by default) -->
+    <div id="debugPanel" class="debug-hidden" style="text-align:center; font-size:0.9em; color:#666; margin-top:6px;">
+      <p id="wsStatus">WebSocket: connecting...</p>
+      <p id="nearStatus">近接: es1=false es2=false</p>
+      <p id="currentStatus">現在のページ: es1</p>
+      <p id="recvCount" style="font-size:0.8em;">メッセージ受信: 0</p>
+      <p id="lastRaw" style="font-size:0.8em;">最後のメッセージ: -</p>
+    </div>
     <div class="button-container">
       <button id="toggleBtn" type="button">エス2 機能設定へ</button>
       <a href="http://192.168.4.1/">エス状態表示</a>
@@ -107,7 +123,12 @@
       <button type="button" id="sendBtn">決定（エス1/エス2まとめて送信）</button>
       <button type="button" id="startBtn">起動</button>
     </div>
+    <div class="button-container" style="justify-content:center; margin-top:8px;">
+      <button id="debugToggleBtn" style="padding:8px 14px; border-radius:6px; background:#444; color:#fff; opacity:0.9;">デバッグ表示</button>
+    </div>
   </div>
+  <!-- Debug toggle button - show under the main action buttons, centered -->
+  
 
   <script>
     // --- モデル（エス1/エス2を別々に保持。画面切替しても値が戻らない） ---
@@ -119,46 +140,107 @@
 
     // --- 近接フラグ（WebSocketで受信： '0,1' のような3バイト） ---
     const near = { es1: false, es2: false }; // false=未接近, true=接近
+    let recvCount = 0;
 
     // --- WebSocket ---
-    const wsUrl = window.location.href.replace("http", "ws").slice(0, -7) + ":81";
-    const socket = new WebSocket(wsUrl);
-    // ★追加：open時に購読申告（configページ）
-    socket.addEventListener('open', () => {
-      socket.send('SUB:CONFIG');
-      console.log("WebSocket connected & SUB:CONFIG sent");
-    });
-
-    // ★ 追加：3バイトの近接データ受信（フォーマット: "0,1"）
-    socket.onmessage = (ev) => {
-      const txt = String(ev.data || "").trim();
-      // 厳密に "0,0" / "0,1" / "1,0" / "1,1" だけ処理
-      if (/^[01],[01]$/.test(txt)) {
-        const [a, b] = txt.split(",");
-        near.es1 = (a === "1");
-        near.es2 = (b === "1");
-        updateStartButtonAppearance(); // 受信のたびに外観更新
-      } else {
-        // ほかの用途（将来の拡張）メッセージは無視
+    // NOTE: Create the WebSocket after DOM loads so we can immediately update DOM on messages
+    let socket = null; // will be initialized once DOM ready
+    function initWebSocket() {
+      // Prevent duplicate sockets if one is already connecting/open
+      if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+        console.log('WebSocket already open or connecting');
+        return;
       }
-    };
+      const wsUrl = 'ws://' + window.location.hostname + ':81';
+      console.log("WebSocket connecting to:", wsUrl);
+      try {
+        socket = new WebSocket(wsUrl);
+      } catch (e) {
+        console.log('WebSocket create failed', e);
+        const s = document.getElementById('wsStatus'); if (s) s.textContent = 'WebSocket: create failed';
+        return;
+      }
+
+      socket.addEventListener('open', () => {
+        console.log("WebSocket connected");
+        const s = document.getElementById('wsStatus'); if (s) s.textContent = 'WebSocket: connected';
+      });
+      socket.addEventListener('error', (ev) => { console.log('WebSocket error', ev); const s = document.getElementById('wsStatus'); if (s) s.textContent = 'WebSocket: error'; });
+      socket.addEventListener('close', (ev) => { console.log('WebSocket closed', ev); const s = document.getElementById('wsStatus'); if (s) s.textContent = 'WebSocket: closed';
+        // Try to reconnect after a delay
+        setTimeout(() => {
+          console.log('Attempting WebSocket reconnect...');
+          initWebSocket();
+        }, 3000);
+      });
+
+      // ★ 近接データ受信（新フォーマットのみを受け付けます）
+      // 新仕様: 受信は「エス1(18) + エス2(18) + 近接2(2)」(合計36+2=38フィールド) のCSV
+      // 例: arr.length >= 38 であれば、配列[36]=near.es1, [37]=near.es2
+      socket.onmessage = (ev) => {
+        const txt = String(ev.data || "").trim();
+        const arr = txt.split(",");
+        recvCount++;
+        console.log('WS recv length=', arr.length, ' raw=', txt, ' count=', recvCount);
+        const lastRawEl = document.getElementById('lastRaw'); if (lastRawEl) lastRawEl.textContent = '最後のメッセージ: ' + txt.slice(0,200);
+        const recvEl = document.getElementById('recvCount'); if (recvEl) recvEl.textContent = 'メッセージ受信: ' + recvCount;
+        if (arr.length >= 38) {
+          // trim each item to avoid whitespace causing mismatch
+          const clean = arr.map(a => String(a || '').trim());
+          const prevNear1 = near.es1;
+          const prevNear2 = near.es2;
+          near.es1 = (clean[36] === "1");
+          near.es2 = (clean[37] === "1");
+          const nsEl = document.getElementById('nearStatus'); if (nsEl) nsEl.textContent = `近接: es1=${near.es1} es2=${near.es2}`;
+          // Log change; update UI only when change occurred for the current page
+          console.log('WS: near es1=', near.es1, 'es2=', near.es2, 'raw36=', clean[36], 'raw37=', clean[37], 'prev1=', prevNear1, 'prev2=', prevNear2);
+          // Update current status UI
+          const currentEl = document.getElementById('currentStatus'); if (currentEl) currentEl.textContent = '現在のページ: ' + current;
+          const prevForCurrent = (current === 'es1') ? prevNear1 : prevNear2;
+          const newForCurrent  = (current === 'es1') ? near.es1  : near.es2;
+          if (prevForCurrent !== newForCurrent) {
+            // Add blink effect to button when updated
+            const startBtn = document.getElementById('startBtn');
+            if (startBtn) {
+              startBtn.classList.remove('blink');
+              void startBtn.offsetWidth; // force reflow
+              startBtn.classList.add('blink');
+            }
+            updateStartButtonAppearance();
+            console.log('UI updated due to change for', current, 'from', prevForCurrent, 'to', newForCurrent);
+          } else {
+            console.log('No UI update required: same near for', current, '(', newForCurrent, ')');
+          }
+        } else {
+          // 新フォーマット以外は無視（旧フォーマットはサポートしない）
+          console.warn('WS recv too short, ignoring', arr.length, txt);
+          // (If you want to support older formats, add parsing here.)
+        }
+      };
+    }
 
     // --- 起動ボタンの外観切替（接近中=緑 / 未接近=グレー + 無効化） ---
     function updateStartButtonAppearance() {
       const btn = document.getElementById("startBtn");
+      if (!btn) return; // guard if DOM not yet ready
       const isNear = (current === "es1") ? near.es1 : near.es2;
 
       if (isNear) {
-        btn.style.backgroundColor = "#4CAF50"; // 緑（既存色）
+        btn.classList.remove('start-disabled');
+        btn.classList.add('start-enabled');
         btn.style.cursor = "pointer";
         btn.disabled = false;
         btn.style.opacity = "1";
       } else {
-        btn.style.backgroundColor = "#9E9E9E"; // グレー
+        btn.classList.remove('start-enabled');
+        btn.classList.add('start-disabled');
         btn.style.cursor = "not-allowed";
         btn.disabled = true;                  // ★ 無効化
         btn.style.opacity = "1";
       }
+      // Update nearStatus debug text
+      const ns = document.getElementById('nearStatus');
+      if (ns) ns.textContent = `近接: es1=${near.es1} es2=${near.es2}`;
     }
 
     // --- ユーティリティ：フォーム→モデル保存 / モデル→フォーム反映 ---
@@ -192,6 +274,7 @@
       document.getElementById("title").textContent = current === "es1" ? "エス1 機能設定" : "エス2 機能設定";
       document.getElementById("whichHint").textContent = `現在: ${current === "es1" ? "エス1" : "エス2"} を編集中（ボタンで切替できます）`;
       document.getElementById("toggleBtn").textContent = current === "es1" ? "エス2 機能設定へ" : "エス1 機能設定へ";
+      const currentEl = document.getElementById('currentStatus'); if (currentEl) currentEl.textContent = '現在のページ: ' + current;
 
       // 画面切替時にもボタン外観を更新
       updateStartButtonAppearance();
@@ -243,6 +326,11 @@
     document.getElementById("sendBtn").addEventListener("click", () => {
       const payload = buildPayload({ startPressed: false });
       const msg = JSON.stringify(payload);
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        console.warn('WebSocket is not open, cannot send.');
+        const s = document.getElementById('wsStatus'); if (s) s.textContent = 'WebSocket: not connected';
+        return;
+      }
       socket.send(msg);
       console.log("Sent (決定):", msg);
     });
@@ -254,6 +342,11 @@
 
       const payload = buildPayload({ startPressed: true });
       const msg = JSON.stringify(payload);
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        console.warn('WebSocket is not open, cannot send.');
+        const s = document.getElementById('wsStatus'); if (s) s.textContent = 'WebSocket: not connected';
+        return;
+      }
       socket.send(msg);
       console.log("Sent (起動):", msg);
     });
@@ -262,6 +355,25 @@
     window.addEventListener("DOMContentLoaded", () => {
       applyToForm();
       updateStartButtonAppearance(); // 初期は未接近扱い→グレー表示
+      // Initialize the websocket after DOM is ready so UI can be updated immediately on messages
+      initWebSocket();
+      // Hook up debug toggle
+      const debugBtn = document.getElementById('debugToggleBtn');
+      const debugPanel = document.getElementById('debugPanel');
+      if (debugBtn && debugPanel) {
+        // Load previous state from localStorage
+        const saved = localStorage.getItem('config_debug_visible');
+        const visible = (saved === '1');
+        debugPanel.classList.toggle('debug-visible', visible);
+        debugPanel.classList.toggle('debug-hidden', !visible);
+        debugBtn.textContent = visible ? 'デバッグ非表示' : 'デバッグ表示';
+        debugBtn.addEventListener('click', () => {
+          const nowVisible = debugPanel.classList.toggle('debug-visible');
+          debugPanel.classList.toggle('debug-hidden', !nowVisible);
+          debugBtn.textContent = nowVisible ? 'デバッグ非表示' : 'デバッグ表示';
+          localStorage.setItem('config_debug_visible', nowVisible ? '1' : '0');
+        });
+      }
     });
   </script>
 </body>

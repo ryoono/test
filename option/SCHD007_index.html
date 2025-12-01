@@ -104,12 +104,17 @@
         render();
     }
 
-    const WebSocketUrl = window.location.href.replace("http", "ws").slice(0, -1) + ":81";
+    // Build WebSocket URL robustly using hostname and port 81
+    const WebSocketUrl = 'ws://' + window.location.hostname + ':81';
+    console.log("WebSocket connecting to:", WebSocketUrl);
     const socket = new WebSocket(WebSocketUrl);
-    // ▼追加：open時（接続確立時）に購読申告を送る
+    // ▼open時の処理（購読申告は不要になったため送信しない）
     socket.addEventListener('open', () => {
-        socket.send('SUB:INDEX');
+        console.log('WebSocket connected');
+        const s = document.getElementById('wsStatus'); if (s) s.textContent = 'WebSocket: connected';
     });
+    socket.addEventListener('error', (ev) => { console.log('WebSocket error', ev); const s = document.getElementById('wsStatus'); if (s) s.textContent = 'WebSocket: error'; });
+    socket.addEventListener('close', (ev) => { console.log('WebSocket closed', ev); const s = document.getElementById('wsStatus'); if (s) s.textContent = 'WebSocket: closed'; });
 
     const labels = [
         "ステップ速度：",
@@ -202,12 +207,22 @@
     }
 
     socket.onmessage = (event) => {
-        // 受信は「エス1(18フィールド) + （あれば）エス2(18フィールド)」の順で同一メッセージ
-        const arr = event.data.split(",");
+        // 受信は「エス1(18フィールド) + （あれば）エス2(18フィールド) + （あれば）近接2フィールド」の順で同一メッセージ
+        // 例: 36フィールドのみ = エス1+エス2
+        //      38フィールド      = エス1 + エス2 + 近接2フィールド
+        const arr = String(event.data || "").trim().split(",");
 
+        // エス1(0..17)
         if (arr.length >= 18) es1Data = arr.slice(0, 18);
+        else es1Data = null;
+        // エス2(18..35)
         if (arr.length >= 36) es2Data = arr.slice(18, 36);
         else es2Data = null;
+
+        // (参考) 36/37 (0-based) に近接情報(0/1,0/1)が入る可能性があるが
+        // index.html は先頭の36フィールドのみ使用する要件のため表示は変更しない。
+        // 必要であれば下記の変数を追加して表示に反映できます。
+        // if (arr.length >= 38) { const near1 = arr[36] === "1"; const near2 = arr[37] === "1"; }
 
         render();
     };
@@ -224,6 +239,7 @@
     </div>
     <div class="container">
         <h1 id="title">エス1状態表示</h1>
+        <p id="wsStatus" style="text-align:center; font-size:0.9em; color:#666; margin-top:6px;">WebSocket: connecting...</p>
         <div class="button-container">
             <!-- ボタン文言はトグルで入れ替える -->
             <button id="toggleBtn" onclick="toggleState()">エス2状態表示</button>

@@ -14,6 +14,8 @@ int8_t rssiThreshold = -40; // 初期閾値
 volatile int8_t receivedRSSI = -100; // 初期値として非常に低いRSSIを設定
 volatile bool i2cDataReceived = false; // I2Cデータ受信フラグ
 
+uint8_t tcp_cnt;
+
 // I2C受信時の割り込みコールバック
 void receiveEvent(int howMany) {
   if (Wire.available()) {
@@ -23,6 +25,7 @@ void receiveEvent(int howMany) {
 }
 
 void setup() {
+  Serial.begin(115200);
   M5.begin();
   M5.Lcd.setTextSize(2);
   M5.Lcd.println("Connecting to WiFi...");
@@ -62,6 +65,7 @@ void setup() {
   M5.Lcd.println("Target Ready");
   M5.Lcd.setCursor(0, 40);
   M5.Lcd.printf("Threshold: %d", rssiThreshold);
+  tcp_cnt = 0;
 }
 
 void loop() {
@@ -94,15 +98,21 @@ void loop() {
   }
 
   // TCP送信
-  if (client.connected()) {
-    if (receivedRSSI == 1 || receivedRSSI < rssiThreshold) {
-      client.println(0);
+  if( !(++tcp_cnt % 2) ){
+    tcp_cnt = 0;
+  
+    if (client.connected()) {
+      if (receivedRSSI == 1 || receivedRSSI < rssiThreshold) {
+        client.println(0);
+        Serial.println(0);
+      } else {
+        client.println(1);
+        Serial.println(1);
+      }
     } else {
-      client.println(1);
+      Serial.println("Disconnected. Reconnecting...");
+      client.connect(hostIP, hostPort);
     }
-  } else {
-    M5.Lcd.println("Disconnected. Reconnecting...");
-    client.connect(hostIP, hostPort);
   }
 
   delay(100); // 送信間隔を調整

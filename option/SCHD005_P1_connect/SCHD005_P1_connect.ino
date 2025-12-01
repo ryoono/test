@@ -1,3 +1,11 @@
+/*
+  SCHD005_P1_connect.ino
+  M5Stack Core2 を用いて、エスカレーター制御装置P1とシリアル通信を行い、
+  状態取得とコマンド送信を行うプログラム。
+  また、WiFiアクセスポイントとして動作し、TCPサーバーでエスカレーター上部/下部
+  デバイスと通信し、WebSocketサーバーでWebクライアントに状態情報を送信する。
+*/
+
 #include <Arduino.h>
 #include <WiFi.h>
 #include <M5Core2.h>
@@ -21,7 +29,8 @@ AsyncWebServer server(80);
 // WiFiサーバーの設定
 WiFiServer wifiServer(50000); // 任意のポート
 
-WiFiClient clientSlot;          // エスカレーター下部デバイスに対応するクライアント
+// エスカレーター下部デバイス（192.168.4.2~4）に対応するクライアント（各IPごとに保持）
+WiFiClient clientSlots[3];
 String clientMessage[3] = {""}; // クライアントからのメッセージ格納用;
 
 // ★ 追加: 192.168.4.2 へ 400ms ごとに送るため
@@ -49,9 +58,9 @@ static const size_t ERROR_STRIDE = 2;   // 各エラー値のストライド（2
 static const uint8_t ERROR_NUM   = 8;   // エラー要素数
 
 // 各項目の変数をグローバルに宣言
-uint16_t stepSpeed = 0;
-uint16_t handrailSpeedRight = 0;
-uint16_t handrailSpeedLeft = 0;
+uint16_t stepSpeed = 2000;
+uint16_t handrailSpeedRight = 1950;
+uint16_t handrailSpeedLeft = 2050;
 uint8_t autoDriveSetting = 0;
 uint8_t aanSetting = 0;
 uint8_t lightingSetting = 0;
@@ -65,8 +74,8 @@ int8_t upperLeftBSensor = 0;
 int8_t upperRightBSensor = 0;
 int8_t lowerLeftBSensor = 0;
 int8_t lowerRightBSensor = 0;
-String errorString = "";
-int8_t errorCount = 0;
+String errorString = "001";
+int8_t errorCount = 1;
 
 uint8_t directionVal    = 0;
 uint8_t operationVal    = 0;
@@ -91,7 +100,8 @@ uint8_t is_near_distance_top_sub = 0; // サブ(ZA2)_上部に接近している
 uint8_t is_near_distance_bot_sub = 0; // サブ(ZA2)_下部に接近しているか 遠い0、近い1
 
 // ★ 追加: ZJ2上部(192.168.4.2)から受け取った追記データ（先頭1文字を除いた41文字）
-String zj2TopAppend = "";
+// 初期値をゼロ（18フィールド）で埋めておく（例外処理なし）
+String zj2TopAppend = "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0";
 
 unsigned long loop_counter = 0;
 
@@ -104,8 +114,6 @@ static unsigned long prev50  = 0;  // 50msごと（ボタン、7コマンド）
 static unsigned long prev250 = 0;  // 250msごと（TSZ）
 
 // ★ 追加: WebSocketの購読先（どのページが開いているか）を記録
-enum SubPage : uint8_t { SUB_NONE = 0, SUB_INDEX = 1, SUB_CONFIG = 2 };
-static volatile SubPage activeSub = SUB_NONE;
 static volatile int activeWsClient = -1; // 現在有効なクライアント番号（1台前提）
 
 // I2C受信時の割り込みコールバック
@@ -124,7 +132,6 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
       Serial.printf("WebSocket connected: %u\n", num);
       // ★ 追加: 新たに接続してきたクライアントを“有効”にする（1台前提）
       activeWsClient = num;
-      activeSub = SUB_NONE;  // ページ未申告の間は未設定
       break;
 
     case WStype_DISCONNECTED:
@@ -132,7 +139,6 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
       // ★ 追加: 切断されたクライアントが有効クライアントなら購読解除
       if ((int)num == activeWsClient) {
         activeWsClient = -1;
-        activeSub = SUB_NONE;
       }
       break;
 
@@ -178,9 +184,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
       String msg = String((char *)payload);
       Serial.printf("Received JSON: %s\n", msg.c_str()); // 受信したJSONデータをそのまま表示
 
-      // ★ 追加: ページ購読の申告（config.html / index.html 側で接続時に送る）
-      if (msg == "SUB:INDEX")  { activeSub = SUB_INDEX;  Serial.println("[WS] subscribe INDEX");  return; }
-      if (msg == "SUB:CONFIG") { activeSub = SUB_CONFIG; Serial.println("[WS] subscribe CONFIG"); return; }
+      // Subscription messages are no longer needed (all clients receive unified data)
 
       // JSONデータのサイズに応じたStaticJsonDocumentを作成
       StaticJsonDocument<256> doc;
@@ -341,21 +345,55 @@ void setup() {
   // SPIFFS（ファイルシステム）を初期化ここから
   if (SPIFFS.begin()){
     M5.Lcd.printf("SPIFFS initialized.\n");
+    Serial.println("SPIFFS initialized successfully");
+    // Debug: list files and check for index/config presence
+    Serial.printf("/index.html exists: %d\n", SPIFFS.exists("/index.html"));
+    Serial.printf("/config.html exists: %d\n", SPIFFS.exists("/config.html"));
   }
   else{
     M5.Lcd.printf("Error initializing SPIFFS.\n");
+    Serial.println("Error initializing SPIFFS.");
   }
   // SPIFFS（ファイルシステム）を初期化ここまで
   
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
-            { request->send(SPIFFS, "/index.html", String(), false); });
-  
-  server.on("/config", HTTP_GET, [](AsyncWebServerRequest *request)
-            { request->send(SPIFFS, "/config.html", String(), false); });
-  
-  server.begin();
+  // Route handlers for both / and /index.html (so access to either works)
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+    Serial.println("HTTP GET / requested");
+    if (SPIFFS.exists("/index.html")) {
+      request->send(SPIFFS, "/index.html", "text/html");
+    } else {
+      Serial.println("/index.html not found in SPIFFS");
+      request->send(500, "text/plain", "500: index.html not found");
+    }
+  });
 
-  // Webサーバーを開始
+  server.on("/index.html", HTTP_GET, [](AsyncWebServerRequest *request) {
+    Serial.println("HTTP GET /index.html requested");
+    if (SPIFFS.exists("/index.html")) {
+      request->send(SPIFFS, "/index.html", "text/html");
+    } else {
+      Serial.println("/index.html not found in SPIFFS");
+      request->send(500, "text/plain", "500: index.html not found");
+    }
+  });
+
+  server.on("/config", HTTP_GET, [](AsyncWebServerRequest *request) {
+    Serial.println("HTTP GET /config requested");
+    if (SPIFFS.exists("/config.html")) {
+      request->send(SPIFFS, "/config.html", "text/html");
+    } else {
+      Serial.println("/config.html not found in SPIFFS");
+      request->send(500, "text/plain", "500: config.html not found");
+    }
+  });
+
+  // Generic notFound handler for debugging
+  server.onNotFound([](AsyncWebServerRequest *request){
+    Serial.printf("NotFound: %s\n", request->url().c_str());
+    request->send(404, "text/plain", "404: Not Found");
+  });
+
+  // Start server once
   server.begin();
 
   // Webソケットを開始
@@ -406,45 +444,57 @@ void loop() {
     WiFiClient newClient = wifiServer.accept();
     IPAddress remoteIP = newClient.remoteIP();
 
-    // 192.168.4.2 / .3 / .4 のみ許可
-    if (remoteIP == knownIP || remoteIP == knownIP2 || remoteIP == knownIP3) {
-      if (clientSlot) clientSlot.stop(); // 既存接続を切断
-      clientSlot = newClient;
+    // 192.168.4.2 / .3 / .4 のみ許可 — 各IPごとに割り当てる
+    int idx = -1;
+    if (remoteIP == knownIP)  idx = 0; // SAJ 下部 (192.168.4.4)
+    else if (remoteIP == knownIP2) idx = 1; // ZJ2 上部 (192.168.4.2)
+    else if (remoteIP == knownIP3) idx = 2; // ZJ2 下部 (192.168.4.3)
+
+    if (idx >= 0) {
+      if (clientSlots[idx]) clientSlots[idx].stop(); // 既存接続を切断
+      clientSlots[idx] = newClient;
+      Serial.printf("Assigned client %s to slot %d\n", remoteIP.toString().c_str(), idx);
+    } else {
+      // 想定外IP (未許可) は接続を切る
+      newClient.stop();
+      Serial.printf("Rejected client %s (unknown IP)\n", remoteIP.toString().c_str());
     }
   }
 
   // クライアントからの受信処理（IPごとに分岐）
-  if (clientSlot && clientSlot.connected() && clientSlot.available()) {
-    String msg = clientSlot.readStringUntil('\n');
-    msg.trim();
+  // すべてのクライアントスロット（各IP）を順にチェックして受信処理
+  for (int idx = 0; idx < 3; ++idx) {
+    WiFiClient &c = clientSlots[idx];
+    if (c && c.connected() && c.available()) {
+      String msg = c.readStringUntil('\n');
+      msg.trim();
 
-    IPAddress rip = clientSlot.remoteIP();
+      IPAddress rip = c.remoteIP();
 
-    if (rip == knownIP2) {
-      // 192.168.4.2: ZJ2上部
-      if (msg[0] == '1')  is_near_distance_top_sub  = 1;
-      else                is_near_distance_top_sub  = 0;
+      if (rip == knownIP2) {
+        // 192.168.4.2: ZJ2上部
+        if (msg[0] == '1')  is_near_distance_top_sub  = 1;
+        else                is_near_distance_top_sub  = 0;
 
-      // ★ 追加: 先頭1文字以降（=41文字）を保持
-      if (msg.length() >= 59) {
-        zj2TopAppend = msg.substring(1);  // 区切りは付けず、そのまま41文字を保持
+        // 先頭データを除いて、そのあとのデータを保存
+        zj2TopAppend = msg.substring(2);  // 先頭1文字とカンマを除く
+        // Serial.println("Updated zj2TopAppend: " + zj2TopAppend);
       }
+      else if (rip == knownIP3) {
+        // 192.168.4.3: ZJ2下部
+        if (msg == "1") is_near_distance_bot_sub  = 1;
+        else            is_near_distance_bot_sub  = 0;
+      }
+      else if (rip == knownIP) {
+        // 192.168.4.4: SAJ下部
+        if (msg == "1") is_near_distance_bot  = 1;
+        else            is_near_distance_bot  = 0;
+      }
+      // Serial.printf("%s%d\n", "esu top:", is_near_distance_top);
+      // Serial.printf("%s%d\n", "esu bot:", is_near_distance_bot);
+      // Serial.printf("%s%d\n", "zj2 top:", is_near_distance_top_sub);
+      // Serial.printf("%s%d\n", "zj2 bot:", is_near_distance_bot_sub);
     }
-    else if (rip == knownIP3) {
-      // 192.168.4.3: ZJ2下部
-      if (msg == "1") is_near_distance_bot_sub  = 1;
-      else            is_near_distance_bot_sub  = 0;
-    }
-    else if (rip == knownIP) {
-      // 192.168.4.4: SAJ下部
-      if (msg == "1") is_near_distance_bot  = 1;
-      else            is_near_distance_bot  = 0;
-    }
-    // 想定外IPは無視
-    Serial.printf("%s%d\n", "esu top:", is_near_distance_top);
-    Serial.printf("%s%d\n", "esu bot:", is_near_distance_bot);
-    Serial.printf("%s%d\n", "zj2 top:", is_near_distance_top_sub);
-    Serial.printf("%s%d\n", "zj2 bot:", is_near_distance_bot_sub);
   }
 
   // ★ 250msごと：TSZ送受信（内部delay(30)はそのまま）
@@ -454,7 +504,7 @@ void loop() {
 
     // シリアル通信でデータを送信
     Serial2.write("TSZ\r");
-    Serial.println("Sent: TSZ\\r");  // デバッグ用に送信データを表示
+    // Serial.println("Sent: TSZ\\r");  // デバッグ用に送信データを表示
     delay(30);  // P1からの返信待ち(必要・既存通り)
 
     if (Serial2.available() >= FRAME_LEN) {
@@ -506,7 +556,12 @@ void loop() {
       }
     }
 
+    uint8_t near1 = (is_near_distance_top || is_near_distance_bot) ? 1 : 0;           // メイン(エス1)
+    uint8_t near2 = (is_near_distance_top_sub || is_near_distance_bot_sub) ? 1 : 0;   // サブ(エス2)
+
+    // Build data from current variables (always, even if no new TSZ arrived)
     // カンマ区切りで連結し、WebSocketで送信
+    // エス1,2の状態(36フィールド) + 接近情報(2フィールド) = 合計38フィールド
     String data = String(stepSpeed) + "," +
                   String(handrailSpeedRight) + "," +
                   String(handrailSpeedLeft) + "," +
@@ -524,29 +579,12 @@ void loop() {
                   String(lowerLeftBSensor) + "," +
                   String(lowerRightBSensor) + "," +
                   String(errorCount) + "," +
-                  errorString + ",";
-    // ★ 追加: 受信した58文字をそのまま“お尻に”結合（データ+","分）
-    data += zj2TopAppend;
-    
-    // ★ 送信先の出し分け（1台前提）
-    //   - SUB_INDEX  : 既存の CSV “data”（index.html 向け）
-    //   - SUB_CONFIG : 「近接フラグ 3byte（'0' or '1'）, カンマ, 3byte」の“2文字+区切り1文字”＝"0,1" を送る
-    //                  今回の要件では「エス1接近データ + ',' + エス2接近データ」= 3byte
-    //                  ここでは「上/下いずれかが1なら1」としてまとめています（必要なら top のみ等に変更可）
-    if (activeWsClient >= 0) {
-      if (activeSub == SUB_CONFIG) {
-        uint8_t near1 = (is_near_distance_top || is_near_distance_bot) ? 1 : 0;           // メイン(エス1)
-        uint8_t near2 = (is_near_distance_top_sub || is_near_distance_bot_sub) ? 1 : 0;   // サブ(エス2)
-        String nearMsg = String(near1) + "," + String(near2); // 例: "0,1"
-        webSocket.sendTXT(activeWsClient, nearMsg);
-      } else {
-        // 未申告 or SUB_INDEX は従来どおり index 用CSV を送る（後方互換）
-        webSocket.sendTXT(activeWsClient, data);
-      }
-    } else {
-      // クライアント未接続時は従来の動作（念のため）
-      webSocket.broadcastTXT(data);
-    }
+                  errorString + "," +
+                  zj2TopAppend + "," + // ★ 追加: 受信した58文字をそのまま“お尻に”結合（データ+","分）
+                  String(near1) + "," +
+                  String(near2);
+    // Serial.printf("Broadcasting data length=%d\n", data.length());
+    webSocket.broadcastTXT(data);
   }
 
   // ★ 400msごとに 192.168.4.2 へ tcp400Payload を送信

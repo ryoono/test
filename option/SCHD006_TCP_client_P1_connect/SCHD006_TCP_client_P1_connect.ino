@@ -1,3 +1,10 @@
+/*
+  SCHD006_TCP_client_P1_connect.ino
+  ZJ2-Top 相当の M5Core2 用クライアントプログラム
+  ホスト(M5-AP親機)へ TCP 接続し、TSZポーリングと状態送信、
+  およびホストからのエス設定受信を行う。
+*/
+
 #include <Arduino.h>
 #include <WiFi.h>
 #include <M5Core2.h>
@@ -41,9 +48,9 @@ static const size_t ERROR_STRIDE = 2;
 static const uint8_t ERROR_NUM   = 8;
 
 // 受信フィールド（サブ側の18フィールド構成はホスト側と完全一致させる）
-uint16_t stepSpeed = 0;
-uint16_t handrailSpeedRight = 0;
-uint16_t handrailSpeedLeft  = 0;
+uint16_t stepSpeed = 3000;
+uint16_t handrailSpeedRight = 3050;
+uint16_t handrailSpeedLeft  = 2950;
 uint8_t  autoDriveSetting = 0;
 uint8_t  aanSetting = 0;
 uint8_t  lightingSetting = 0;
@@ -57,8 +64,8 @@ int8_t   upperLeftBSensor  = 0;
 int8_t   upperRightBSensor = 0;
 int8_t   lowerLeftBSensor  = 0;
 int8_t   lowerRightBSensor = 0;
-String   errorString = "";
-int8_t   errorCount  = 0;
+String   errorString = "EEE";
+int8_t   errorCount  = 1;
 
 // ========= 下り(ホスト→この端末)のエス設定（8桁の数値文字列） =========
 // 受信例: "20110201"  (方向/運転/速度/待機/照明/AAN/起動/指示)  ※各1桁
@@ -70,6 +77,8 @@ uint8_t lightingVal  = 0;   // 0:on 1:off 2:linked
 uint8_t aanVal       = 0;   // 0:on 1:off
 uint8_t startVal     = 0;   // 0/1
 uint8_t instructionVal = 0; // 0:none 1:top 2:bot
+
+uint8_t cnt = 0;//debug
 
 // ========= タイマ =========
 static unsigned long prev250 = 0;  // TSZポーリング/状態送信
@@ -101,6 +110,11 @@ static inline void pollTSZ() {
   if (Serial2.available() >= FRAME_LEN) {
     uint8_t buffer[FRAME_LEN];
     Serial2.readBytes(buffer, FRAME_LEN);
+
+    // for( uint8_t i=0; i<FRAME_LEN; ++i ) {//debug
+    //   buffer[i] = cnt + i;
+    // }
+    // ++cnt;
 
     // パース
     // uint16_t preamble = (buffer[1] << 8) | buffer[0]; // 使わないが残しておくならコメントアウト
@@ -166,12 +180,20 @@ static inline void sendStateToHost() {
   ensureTcpConnected();
   if (!hostClient.connected()) return;
 
+  // debug
+  if( !( ++cnt % 20 ) ){
+    if(is_near_top) is_near_top=0;
+    else            is_near_top=1;
+  }
+
   // 1文字(近接) + 18フィールドCSV
   String line;
-  line = "";
-  line += (is_near_top ? '1,' : '0,');
+  if( is_near_top ) line = "1,";
+  else              line = "0,";
+
   line += buildCsv18();
   hostClient.println(line);
+  // Serial.println(line);  // debug
 }
 
 // ホスト→本機：8桁（direction/operation/speed/standby/lighting/aan/start/instruction）
@@ -190,6 +212,17 @@ static inline void readSettingsFromHost() {
     aanVal         = (uint8_t)(msg[5] - '0') & 0x01;
     startVal       = (uint8_t)(msg[6] - '0') & 0x01;
     instructionVal = (uint8_t)(msg[7] - '0') % 3;
+
+    String debug_print = "";
+    debug_print =  String(directionVal) + "," +
+                  String(operationVal) + "," +
+                  String(SpeedVal) + "," +
+                  String(standbyVal) + "," +
+                  String(lightingVal) + "," +
+                  String(aanVal) + "," +
+                  String(startVal) + "," +
+                  String(instructionVal);
+    Serial.println("Settings received: " + debug_print); // debug
   }
 }
 
@@ -248,6 +281,8 @@ void setup() {
   // 画面
   M5.Lcd.setCursor(8,82);  M5.Lcd.print("RSSI/near: ");
   M5.Lcd.setCursor(8,106); M5.Lcd.print("TCP: ");
+
+  Serial.begin(115200);
 }
 
 void loop() {
