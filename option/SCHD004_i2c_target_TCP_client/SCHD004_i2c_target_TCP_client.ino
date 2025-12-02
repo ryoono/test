@@ -51,6 +51,7 @@ volatile int8_t receivedRSSI = -100; // 初期値として非常に低いRSSIを
 volatile bool i2cDataReceived = false; // I2Cデータ受信フラグ
 
 uint8_t tcp_cnt;
+String deviceName = ""; // 選択されたデバイス名（グローバル）
 
 // I2C受信時の割り込みコールバック
 void receiveEvent(int howMany) {
@@ -115,8 +116,10 @@ void setup() {
   IPAddress local_IP;
   if (selectedIPLastOctet == 3) {
     local_IP = IPAddress(192, 168, 4, 3); // ⑧
+    deviceName = "ZJ2-Bot";
   } else {
     local_IP = IPAddress(192, 168, 4, 4); // ⑨
+    deviceName = "u-Bot";
   }
   IPAddress gateway(192, 168, 4, 1);
   IPAddress subnet(255, 255, 255, 0);
@@ -154,11 +157,18 @@ void setup() {
   Wire.begin(I2C_SLAVE_ADDR);
   Wire.onReceive(receiveEvent);
 
-  // 初期表示
+  // 初期表示: 1行目にデバイス名、2行目にRSSI、3行目に閾値
   M5.Lcd.clear();
+  M5.Lcd.setTextSize(2);
   M5.Lcd.setCursor(0, 0);
-  M5.Lcd.println("Target Ready");
+  M5.Lcd.println(deviceName);
   M5.Lcd.setCursor(0, 40);
+  if (receivedRSSI == 1) {
+    M5.Lcd.println("No Connection");
+  } else {
+    M5.Lcd.printf("RSSI: %d", receivedRSSI);
+  }
+  M5.Lcd.setCursor(0, 80);
   M5.Lcd.printf("Threshold: %d", rssiThreshold);
   tcp_cnt = 0;
 }
@@ -169,27 +179,31 @@ void loop() {
   // 閾値の変更
   if (M5.BtnA.wasPressed()) {
     rssiThreshold--;
-    M5.Lcd.setCursor(0, 40);
+    M5.Lcd.setCursor(0, 80);
     M5.Lcd.printf("Threshold: %d  ", rssiThreshold); // 余分なスペースで上書き
   }
   if (M5.BtnC.wasPressed()) {
     rssiThreshold++;
-    M5.Lcd.setCursor(0, 40);
+    M5.Lcd.setCursor(0, 80);
     M5.Lcd.printf("Threshold: %d  ", rssiThreshold); // 余分なスペースで上書き
   }
 
   // I2Cデータ受信時の処理
   if (i2cDataReceived) {
     i2cDataReceived = false; // フラグをリセット
+    // 1行目: デバイス名、2行目: RSSI、3行目: 閾値
     M5.Lcd.clear();
     M5.Lcd.setTextSize(2);
     M5.Lcd.setCursor(0, 0);
-    
+    M5.Lcd.println(deviceName);
+    M5.Lcd.setCursor(0, 40);
     if (receivedRSSI == 1) {
       M5.Lcd.println("No Connection");
     } else {
       M5.Lcd.printf("RSSI: %d", receivedRSSI);
     }
+    M5.Lcd.setCursor(0, 80);
+    M5.Lcd.printf("Threshold: %d", rssiThreshold);
   }
 
   // TCP送信（約500msごと）

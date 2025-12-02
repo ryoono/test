@@ -632,7 +632,7 @@ void loop() {
                       String(aanVal2) + "," +
                       String(startVal2) + "," +
                       String(instructionVal);
-      Serial.println( tcp400Payload ); // debug
+      // Serial.println( tcp400Payload ); // debug
 
       client400.println(tcp400Payload);
       Serial.printf("client400 sent: %s\n", tcp400Payload.c_str());

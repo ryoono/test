@@ -225,15 +225,15 @@ static inline void readSettingsFromHost() {
 
     Serial.println("0Settings received: " + msg); // debug
 
-    String stettingsDebug = String(directionVal) + "," +
-                             String(operationVal) + "," +
-                             String(SpeedVal) + "," +
-                             String(standbyVal) + "," +
-                             String(lightingVal) + "," +
-                             String(aanVal) + "," +
-                             String(startVal) + "," +
-                             String(instructionVal);
-    Serial.println("1Settings received: " + stettingsDebug); // debug
+    // String stettingsDebug = String(directionVal) + "," +
+    //                          String(operationVal) + "," +
+    //                          String(SpeedVal) + "," +
+    //                          String(standbyVal) + "," +
+    //                          String(lightingVal) + "," +
+    //                          String(aanVal) + "," +
+    //                          String(startVal) + "," +
+    //                          String(instructionVal);
+    // Serial.println("1Settings received: " + stettingsDebug); // debug
   }
 }
 
