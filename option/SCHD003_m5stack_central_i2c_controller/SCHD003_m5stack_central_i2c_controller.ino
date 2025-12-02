@@ -2,7 +2,7 @@
  * プログラム名: エスカレーター乗降口用BLEセントラルデバイス
  * 説明: このプログラムは、エスカレーターの乗降口に設置されるBLEセントラルデバイスです。
  *       デバイスはBLEのセントラルとして動作し、特定のUUIDを持つBLEアドバタイズを監視します。
- *       受信したアドバタイズからRSSIを算出し、I2C経由でM5Stack Core2へ100msごとに送信します。
+ *       受信したアドバタイズからRSSIを算出し、I2C経由でM5Stack Core2へ400msごとに送信します。
  *       アドバタイズを受信していない場合も、未受信であることを送信します。
  * 
  * ハードウェア: M5Stack Core2
@@ -14,13 +14,13 @@
  * 仕様:
  * - BLEセントラルとして動作
  * - Heart Rate Service UUID (180D) を持つアドバタイズを監視
- * - 100msごとにI2CでRSSIを送信
+ * - 400msごとにI2CでRSSIを送信
  * - 受信したRSSI値のローパスフィルタリング
  * 
  * 使い方:
  * 1. M5Stack Core2を準備し、プログラムをアップロードします。
  * 2. デバイスが起動すると、BLEアドバタイズの監視を開始します。
- * 3. 100msごとにI2CでRSSI値を送信します。
+ * 3. 400msごとにI2CでRSSI値を送信します。
  * 
  * 注意事項:
  * - BLEスキャンはUUID "180D"にフィルタリングされています。
@@ -36,11 +36,11 @@
 #define I2C_SLAVE_ADDR 8
 
 // グローバル変数（BLE RSSI値蓄積用）
-// 100ms間に受信した全RSSI値の合計とカウントを保持し、後で平均値を算出します。
+// 400ms間に受信した全RSSI値の合計とカウントを保持し、後で平均値を算出します。
 volatile int rssiSum = 0;
 volatile int rssiCount = 0;
 
-// 100msタイマー割り込みによりI2C送信処理を行うフラグ
+// 400msタイマー割り込みによりI2C送信処理を行うフラグ
 volatile bool i2cSendFlag = false;
 
 // ESP32のハードウェアタイマー（タイマー0を利用）
@@ -81,9 +81,9 @@ void setup() {
   
   // ESP32ハードウェアタイマー初期化（80分周で1μs単位、カウントアップ）
   timer = timerBegin(0, 80, true);
-  // 100ms = 100,000μs毎にonTimer()を呼ぶ
+  // 400ms = 400,000μs毎にonTimer()を呼ぶ
   timerAttachInterrupt(timer, &onTimer, true);
-  timerAlarmWrite(timer, 100000, true);
+  timerAlarmWrite(timer, 400000, true);
   timerAlarmEnable(timer);
   
   // LCDに初期メッセージ（デバッグ用）
@@ -139,7 +139,7 @@ void loop() {
     i2cSendFlag = false;
     interrupts();
     
-    // 100ms間に1回もRSSI更新がなければ count == 0
+    // 400ms間に1回もRSSI更新がなければ count == 0
     if (count == 0) {
       sendVal = 1;  // 接続無しを意味する値
     } else {

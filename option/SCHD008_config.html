@@ -29,6 +29,10 @@
     .button-container a, .button-container button {
       padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer; text-decoration: none;
     }
+    /* Style for send button to avoid confusion */
+    #sendBtn { background-color: #2196F3 !important; }
+    /* Style for the stop button (same as start) */
+    #stopBtn { margin-left: 6px; }
     /* Explicit classes for start button to ensure coloring even when disabled */
     .start-enabled { background-color: #4CAF50 !important; color: white; }
     .start-disabled { background-color: #9E9E9E !important; color: white; }
@@ -120,8 +124,9 @@
     </div>
 
     <div class="button-container">
-      <button type="button" id="sendBtn">決定（エス1/エス2まとめて送信）</button>
+      <button type="button" id="sendBtn">決定</button>
       <button type="button" id="startBtn">起動</button>
+      <button type="button" id="stopBtn">停止</button>
     </div>
     <div class="button-container" style="justify-content:center; margin-top:8px;">
       <button id="debugToggleBtn" style="padding:8px 14px; border-radius:6px; background:#444; color:#fff; opacity:0.9;">デバッグ表示</button>
@@ -222,6 +227,7 @@
     // --- 起動ボタンの外観切替（接近中=緑 / 未接近=グレー + 無効化） ---
     function updateStartButtonAppearance() {
       const btn = document.getElementById("startBtn");
+      const stopBtn = document.getElementById("stopBtn");
       if (!btn) return; // guard if DOM not yet ready
       const isNear = (current === "es1") ? near.es1 : near.es2;
 
@@ -231,12 +237,26 @@
         btn.style.cursor = "pointer";
         btn.disabled = false;
         btn.style.opacity = "1";
+        if (stopBtn) {
+          stopBtn.classList.remove('start-disabled');
+          stopBtn.classList.add('start-enabled');
+          stopBtn.style.cursor = "pointer";
+          stopBtn.disabled = false;
+          stopBtn.style.opacity = "1";
+        }
       } else {
         btn.classList.remove('start-enabled');
         btn.classList.add('start-disabled');
         btn.style.cursor = "not-allowed";
         btn.disabled = true;                  // ★ 無効化
         btn.style.opacity = "1";
+        if (stopBtn) {
+          stopBtn.classList.remove('start-enabled');
+          stopBtn.classList.add('start-disabled');
+          stopBtn.style.cursor = "not-allowed";
+          stopBtn.disabled = true;
+          stopBtn.style.opacity = "1";
+        }
       }
       // Update nearStatus debug text
       const ns = document.getElementById('nearStatus');
@@ -295,19 +315,22 @@
     });
 
     // 送信用ペイロード生成（startフラグの挙動を切替）
-    function buildPayload({ startPressed }) {
+    function buildPayload({ action }) {
       saveFromForm();
       const s1 = model.es1;
       const s2 = model.es2;
 
-      // デフォルトは両方false（決定ボタン時）
-      let start  = false;
-      let start2 = false;
+      // デフォルトは両方 'non'（決定ボタン時）
+      let start  = 'non';
+      let start2 = 'non';
 
-      // 起動ボタン時は、表示中のエスのみtrue、もう片方はfalse固定
-      if (startPressed) {
-        if (current === "es1") { start = true;  start2 = false; }
-        else                   { start = false; start2 = true;  }
+      // action: 'non', 'start', 'stop'
+      if (action === 'start') {
+        if (current === 'es1') { start = 'start'; start2 = 'non'; }
+        else                   { start = 'non';  start2 = 'start'; }
+      } else if (action === 'stop') {
+        if (current === 'es1') { start = 'stop'; start2 = 'non'; }
+        else                   { start = 'non';  start2 = 'stop'; }
       }
 
       return {
@@ -317,15 +340,46 @@
         // エス2（語尾2）
         direction2: s2.direction, operation2: s2.operation, speed2: s2.speed,
         standby2: s2.standby, lighting2: s2.lighting, aan2: s2.aan,
-        // 追加：起動フラグ
+        // 追加：起動/停止フラグ ("non"/"start"/"stop")
         start: start, start2: start2
       };
     }
 
-    // 「決定」：両方 start=false
+    // Build the payload for the "決定" button: only include the fields for the currently displayed escalator
+    function buildDecisionPayload() {
+      saveFromForm();
+      const s1 = model.es1;
+      const s2 = model.es2;
+      if (current === 'es1') {
+        return {
+          direction: s1.direction, operation: s1.operation, speed: s1.speed,
+          standby: s1.standby, lighting: s1.lighting, aan: s1.aan,
+          start: 'non'
+        };
+      } else {
+        return {
+          direction2: s2.direction, operation2: s2.operation, speed2: s2.speed,
+          standby2: s2.standby, lighting2: s2.lighting, aan2: s2.aan,
+          start2: 'non'
+        };
+      }
+    }
+
+    // 「決定」：両方 start='non'
     document.getElementById("sendBtn").addEventListener("click", () => {
-      const payload = buildPayload({ startPressed: false });
-      const msg = JSON.stringify(payload);
+      const payload = buildDecisionPayload();
+      // Ensure we only send fields relevant to the current page
+      const allowedEs1 = ['direction','operation','speed','standby','lighting','aan','start'];
+      const allowedEs2 = ['direction2','operation2','speed2','standby2','lighting2','aan2','start2'];
+      const filtered = {};
+      if (current === 'es1') {
+        for (const k of allowedEs1) { if (payload.hasOwnProperty(k)) filtered[k] = payload[k]; }
+      } else {
+        for (const k of allowedEs2) { if (payload.hasOwnProperty(k)) filtered[k] = payload[k]; }
+      }
+      // No 'type' field in outgoing JSON (server expects no 'type')
+      console.log('Filtered payload:', filtered);
+      const msg = JSON.stringify(filtered);
       if (!socket || socket.readyState !== WebSocket.OPEN) {
         console.warn('WebSocket is not open, cannot send.');
         const s = document.getElementById('wsStatus'); if (s) s.textContent = 'WebSocket: not connected';
@@ -335,12 +389,35 @@
       console.log("Sent (決定):", msg);
     });
 
-    // 「起動」：表示中のみ true、もう片方 false（未接近なら無効）
+    // Build the payload for the Start/Stop buttons: only include fields for the currently displayed escalator
+    function buildStartStopPayload({ action }) {
+      saveFromForm();
+      const s1 = model.es1;
+      const s2 = model.es2;
+      if (current === 'es1') {
+        return {
+          direction: s1.direction, operation: s1.operation, speed: s1.speed,
+          standby: s1.standby, lighting: s1.lighting, aan: s1.aan,
+          start: action, // 'start' or 'stop'
+        };
+      } else {
+        return {
+          direction2: s2.direction, operation2: s2.operation, speed2: s2.speed,
+          standby2: s2.standby, lighting2: s2.lighting, aan2: s2.aan,
+          start2: action, // 'start' or 'stop'
+        };
+      }
+    }
+
+    // 「起動」：表示中のみ start='start'、もう片方 'non'（未接近なら無効）
     document.getElementById("startBtn").addEventListener("click", () => {
       const btn = document.getElementById("startBtn");
       if (btn.disabled) return; // ★ 無効時は処理しない
-
-      const payload = buildPayload({ startPressed: true });
+      // Build a filtered payload only for the current escalator
+      const payload = buildStartStopPayload({ action: 'start' });
+      // No 'type' field in outgoing JSON (server expects no 'type')
+      // Add debug logging similar to 決定 button
+      console.log('Filtered payload (起動):', payload);
       const msg = JSON.stringify(payload);
       if (!socket || socket.readyState !== WebSocket.OPEN) {
         console.warn('WebSocket is not open, cannot send.');
@@ -349,6 +426,24 @@
       }
       socket.send(msg);
       console.log("Sent (起動):", msg);
+    });
+
+    // 「停止」：表示中のみ stop='stop'、もう片方 'non'（未接近なら無効）
+    document.getElementById("stopBtn").addEventListener("click", () => {
+      const btn = document.getElementById("stopBtn");
+      if (btn.disabled) return; // 無効時は処理しない
+      // Build a filtered payload only for the current escalator
+      const payload = buildStartStopPayload({ action: 'stop' });
+      // No 'type' field in outgoing JSON (server expects no 'type')
+      console.log('Filtered payload (停止):', payload);
+      const msg = JSON.stringify(payload);
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        console.warn('WebSocket is not open, cannot send.');
+        const s = document.getElementById('wsStatus'); if (s) s.textContent = 'WebSocket: not connected';
+        return;
+      }
+      socket.send(msg);
+      console.log("Sent (停止):", msg);
     });
 
     // 初期反映

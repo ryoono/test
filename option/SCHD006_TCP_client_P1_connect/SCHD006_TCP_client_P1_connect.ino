@@ -22,6 +22,10 @@ const IPAddress hostIP(192,168,4,1);
 const uint16_t hostPort = 50000;
 WiFiClient hostClient;
 
+// WiFiサーバーの設定
+WiFiClient newClient;
+WiFiServer wifiServer(50000); // 任意のポート
+
 // ========= I2C =========
 // 外部(I2Cマスター)からRSSI/近接トリガを受け取る想定。自ボードは I2Cスレーブ。
 #define I2C_SLAVE_ADDR 8
@@ -78,7 +82,7 @@ uint8_t aanVal       = 0;   // 0:on 1:off
 uint8_t startVal     = 0;   // 0/1
 uint8_t instructionVal = 0; // 0:none 1:top 2:bot
 
-uint8_t cnt = 0;//debug
+// uint8_t cnt = 0;//debug
 
 // ========= タイマ =========
 static unsigned long prev250 = 0;  // TSZポーリング/状態送信
@@ -90,7 +94,13 @@ static inline void ensureTcpConnected() {
   if (hostClient.connected()) return;
   hostClient.stop();
   // 再接続を試みる
-  hostClient.connect(hostIP, hostPort);
+  Serial.print("Attempting TCP connect to host ");
+  Serial.printf("%s:%d\n", hostIP.toString().c_str(), hostPort);
+  if (hostClient.connect(hostIP, hostPort)) {
+    Serial.println("Connected to host");
+  } else {
+    Serial.println("Failed to connect to host");
+  }
 }
 
 static inline void applyI2CToNearFlag() {
@@ -110,11 +120,6 @@ static inline void pollTSZ() {
   if (Serial2.available() >= FRAME_LEN) {
     uint8_t buffer[FRAME_LEN];
     Serial2.readBytes(buffer, FRAME_LEN);
-
-    // for( uint8_t i=0; i<FRAME_LEN; ++i ) {//debug
-    //   buffer[i] = cnt + i;
-    // }
-    // ++cnt;
 
     // パース
     // uint16_t preamble = (buffer[1] << 8) | buffer[0]; // 使わないが残しておくならコメントアウト
@@ -181,10 +186,10 @@ static inline void sendStateToHost() {
   if (!hostClient.connected()) return;
 
   // debug
-  if( !( ++cnt % 20 ) ){
-    if(is_near_top) is_near_top=0;
-    else            is_near_top=1;
-  }
+  // if( !( ++cnt % 20 ) ){
+  //   if(is_near_top) is_near_top=0;
+  //   else            is_near_top=1;
+  // }
 
   // 1文字(近接) + 18フィールドCSV
   String line;
@@ -198,31 +203,37 @@ static inline void sendStateToHost() {
 
 // ホスト→本機：8桁（direction/operation/speed/standby/lighting/aan/start/instruction）
 static inline void readSettingsFromHost() {
-  if (!hostClient.connected()) return;
-  while (hostClient.connected() && hostClient.available()) {
-    String msg = hostClient.readStringUntil('\n');
-    msg.trim();
-    if (msg.length() < 8) continue; // 想定外
-    // 先頭8文字だけ使用（余分は無視）
-    directionVal   = (uint8_t)(msg[0] - '0') & 0x03;
-    operationVal   = (uint8_t)(msg[1] - '0') & 0x01;
-    SpeedVal       = (uint8_t)(msg[2] - '0') % 3;
-    standbyVal     = (uint8_t)(msg[3] - '0') & 0x01;
-    lightingVal    = (uint8_t)(msg[4] - '0') % 3;
-    aanVal         = (uint8_t)(msg[5] - '0') & 0x01;
-    startVal       = (uint8_t)(msg[6] - '0') & 0x01;
-    instructionVal = (uint8_t)(msg[7] - '0') % 3;
 
-    String debug_print = "";
-    debug_print =  String(directionVal) + "," +
-                  String(operationVal) + "," +
-                  String(SpeedVal) + "," +
-                  String(standbyVal) + "," +
-                  String(lightingVal) + "," +
-                  String(aanVal) + "," +
-                  String(startVal) + "," +
-                  String(instructionVal);
-    Serial.println("Settings received: " + debug_print); // debug
+  if (!newClient.connected()) return;
+
+  while (newClient.connected() && newClient.available()) {
+    String msg = newClient.readStringUntil('\n');
+    msg.trim();
+    if (msg.length() < 15) continue; // 想定外
+
+    // 1,0,2,1,2,1,1,0
+    // ↑のような文字列を受信するため
+    // ,以外の場所を読み込み
+    directionVal   = (uint8_t)(msg[ 0] - '0') & 0x03;
+    operationVal   = (uint8_t)(msg[ 2] - '0') & 0x01;
+    SpeedVal       = (uint8_t)(msg[ 4] - '0') % 3;
+    standbyVal     = (uint8_t)(msg[ 6] - '0') & 0x01;
+    lightingVal    = (uint8_t)(msg[ 8] - '0') % 3;
+    aanVal         = (uint8_t)(msg[10] - '0') & 0x01;
+    startVal       = (uint8_t)(msg[12] - '0') & 0x03;
+    instructionVal = (uint8_t)(msg[14] - '0') % 3;
+
+    Serial.println("0Settings received: " + msg); // debug
+
+    String stettingsDebug = String(directionVal) + "," +
+                             String(operationVal) + "," +
+                             String(SpeedVal) + "," +
+                             String(standbyVal) + "," +
+                             String(lightingVal) + "," +
+                             String(aanVal) + "," +
+                             String(startVal) + "," +
+                             String(instructionVal);
+    Serial.println("1Settings received: " + stettingsDebug); // debug
   }
 }
 
@@ -266,13 +277,16 @@ void setup() {
   M5.Lcd.println();
   M5.Lcd.setCursor(8,58); M5.Lcd.printf("IP: %s\n", WiFi.localIP().toString().c_str());
 
+  // WiFiサーバーを開始
+  wifiServer.begin();
+
   // TCP 接続開始
   ensureTcpConnected();
 
   // Serial2
   Serial.begin(115200);
-  Serial2.begin(38400, SERIAL_8E1, RX_PIN, TX_PIN);
-  delay(300);
+  Serial2.begin(38400, SERIAL_8E1, RX_PIN, TX_PIN);  // シリアルポート2のボーレートを38400、データビットを8、パリティビットを偶数、ストップビットを1に設定し、RXを13、TXを14に設定します。
+  delay(1000);
 
   // I2C スレーブ
   Wire.begin(I2C_SLAVE_ADDR);
@@ -301,6 +315,15 @@ void loop() {
 
   // ホストから設定を受信（随時）
   readSettingsFromHost();
+
+  // ★ WiFi受信処理：毎ループ（≈1ms）
+  // 新しいクライアントの接続処理
+  if (wifiServer.hasClient()) {
+    newClient = wifiServer.accept();
+    IPAddress remoteIP = newClient.remoteIP();
+
+    Serial.printf("Assigned client %s\n", remoteIP.toString().c_str());
+  }
 
   // 250msごと：TSZ取得→状態行をホストへ送信
   if (now - prev250 >= 250) {

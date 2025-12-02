@@ -43,6 +43,18 @@ IPAddress knownIP = IPAddress(192, 168, 4, 4);  // エスカレーター下部�
 IPAddress knownIP2 = IPAddress(192, 168, 4, 2); // サブエスカレーター(ZJ2)上部デバイス
 IPAddress knownIP3 = IPAddress(192, 168, 4, 3); // サブエスカレーター(ZJ2)下部デバイス
 
+// Ensure client400 is connected to knownIP2:peerPort400
+static inline void ensureClient400Connected() {
+  if (client400 && client400.connected()) return;
+  client400.stop();
+  Serial.printf("Attempting client400 connect to %s:%d\n", knownIP2.toString().c_str(), peerPort400);
+  if (client400.connect(knownIP2, peerPort400)) {
+    Serial.println("client400 connected");
+  } else {
+    Serial.println("client400 connect failed");
+  }
+}
+
 /* ピンをここで定義します */
 /* モジュールの設定と同じにする必要があります */
 #define RX_PIN 13  // M5Stack Core2のRXピン
@@ -84,6 +96,8 @@ uint8_t standbyVal      = 0;
 uint8_t lightingVal     = 0;
 uint8_t aanVal          = 0;
 uint8_t startVal        = 0;
+uint8_t startVal_buf    = 0;
+
 // ★ 追加: “2”系の受け取り値
 uint8_t directionVal2   = 0;
 uint8_t operationVal2   = 0;
@@ -92,6 +106,7 @@ uint8_t standbyVal2     = 0;
 uint8_t lightingVal2    = 0;
 uint8_t aanVal2         = 0;
 uint8_t startVal2       = 0;
+uint8_t startVal2_buf   = 0;
 
 uint8_t instructionVal  = 0;
 uint8_t is_near_distance_top = 0; // メイン(SAJ)_上部に接近しているか 遠い0、近い1
@@ -112,6 +127,7 @@ volatile bool i2cDataReceived = false; // I2Cデータ受信フラグ
 // ★ 追加: 周期制御用タイマ
 static unsigned long prev50  = 0;  // 50msごと（ボタン、7コマンド）
 static unsigned long prev250 = 0;  // 250msごと（TSZ）
+static unsigned long prev1000 = 0; // 1000msごと（startVal立ち上がり検出）
 
 // ★ 追加: WebSocketの購読先（どのページが開いているか）を記録
 static volatile int activeWsClient = -1; // 現在有効なクライアント番号（1台前提）
@@ -160,8 +176,8 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
         "standby2": "low",
         "lighting2": "off",
         "aan2": "off",
-        "start": false,
-        "start2": false
+        "start": non,
+        "start2": non
       }
       受信ペイロード例(起動ボタン(エス2選択中)):
       {
@@ -177,8 +193,8 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
         "standby2": "low",
         "lighting2": "off",
         "aan2": "off",
-        "start": false,
-        "start2": true
+        "start": non,
+        "start2": start
       }
       */
       String msg = String((char *)payload);
@@ -215,6 +231,9 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
       String lighting2  = doc["lighting2"].as<String>();
       String aan2       = doc["aan2"].as<String>();
       String start2     = doc["start2"].as<String>();
+
+      // 送信されてこない要素は無視するため、elseを使わず、else ifを用いる
+      // 送信されてこない要素の場合は、変数を上書きしない
 
       // 文字列の内容を見て、数値に変換して代入
       if (direction == "UP") {
@@ -259,10 +278,12 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
         aanVal = 1;
       }
 
-      if (start == "true") {
+      if (start == "start") {
         startVal = 1;
-      } else {
-        startVal = 0;
+      } else if (start == "stop") {
+        startVal = 2;
+      } else if( start == "non"){
+        startVal = 0; // 'non' -> 0
       }
 
       // direction2
@@ -313,10 +334,12 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
         aanVal2 = 1;
       }
 
-      if (start2 == "true") {
+      if (start2 == "start") {
         startVal2 = 1;
-      } else {
-        startVal2 = 0;
+      } else if (start2 == "stop") {
+        startVal2 = 2;
+      } else if( start2 == "non"){
+        startVal2 = 0; // 'non' -> 0
       }
     }
     break;
@@ -407,6 +430,9 @@ void setup() {
 
   // WiFiサーバーを開始
   wifiServer.begin();
+
+  // Try connecting client400 (to 192.168.4.2:50000) immediately
+  ensureClient400Connected();
 
   // I2Cスレーブとして初期化
   Wire.begin(I2C_SLAVE_ADDR);
@@ -591,24 +617,25 @@ void loop() {
   if (now - prev400 >= 400) {
     prev400 += 400;
 
-    if (!client400.connected()) {
-      client400.stop(); // 念のため
-      client400.connect(knownIP2, peerPort400); // 192.168.4.2:50000 に接続
-    }
+    // Ensure client400 remains connected and send tcp400Payload when connected
+    ensureClient400Connected();
     if (client400.connected()) {
-      tcp400Payload = "";
-      tcp400Payload += String(directionVal2);
-      tcp400Payload += String(operationVal2);
-      tcp400Payload += String(SpeedVal2);;
-      tcp400Payload += String(standbyVal2);
-      tcp400Payload += String(lightingVal2);
-      tcp400Payload += String(aanVal2);
-      tcp400Payload += String(startVal2);
       if( is_near_distance_top_sub == 1 )       instructionVal = 1;
       else if( is_near_distance_bot_sub == 1 )  instructionVal = 2;
-      else                                    instructionVal = 0;
-      tcp400Payload += String(instructionVal);
+      else                                      instructionVal = 0;
+      tcp400Payload = "";
+      tcp400Payload = String(directionVal2) + "," +
+                      String(operationVal2) + "," +
+                      String(SpeedVal2) + "," +
+                      String(standbyVal2) + "," +
+                      String(lightingVal2) + "," +
+                      String(aanVal2) + "," +
+                      String(startVal2) + "," +
+                      String(instructionVal);
+      Serial.println( tcp400Payload ); // debug
+
       client400.println(tcp400Payload);
+      Serial.printf("client400 sent: %s\n", tcp400Payload.c_str());
     }
   }
 
@@ -628,48 +655,52 @@ void loop() {
       M5.Lcd.printf("Threshold: %d  ", rssiThreshold);
     }
 
-  // P1にコマンドを送信する。
-  // 7コマンドあるが、50msごとに1つずつ送り続ける
-  // 連続で送った時にP1側で処理できるのかがよく分からないので、間をおいて送信する
-  // 最大で400msのラグが発生する場合があるが、短いので良しとした。
+    // P1にコマンドを送信する。
+    // 7コマンドあるが、50msごとに1つずつ送り続ける
+    // 連続で送った時にP1側で処理できるのかがよく分からないので、間をおいて送信する
+    // 最大で400msのラグが発生する場合があるが、短いので良しとした。
     ++loop_counter;
-    if( loop_counter == 1 ){
-      String sendCmd = "DVDR" + String(directionVal) + "\r";
-      Serial2.write(sendCmd.c_str());
-    }
-    else if( loop_counter == 2 ){
-      String sendCmd = "DVCF" + String(operationVal) + "\r";
-      Serial2.write(sendCmd.c_str());
-    }
-    else if( loop_counter == 3 ){
-      String sendCmd = "DVSP" + String(SpeedVal) + "\r";
-      Serial2.write(sendCmd.c_str());
-    }
-    else if( loop_counter == 4 ){
-      String sendCmd = "DVSB" + String(standbyVal) + "\r";
-      Serial2.write(sendCmd.c_str());
-    }
-    else if( loop_counter == 5 ){
-      String sendCmd = "DVLG" + String(lightingVal) + "\r";
-      Serial2.write(sendCmd.c_str());
-    }
-    else if( loop_counter == 6 ){
-      String sendCmd = "DVAA" + String(aanVal) + "\r";
-      Serial2.write(sendCmd.c_str());
-    }
-    else if( loop_counter == 7 ){
-      String sendCmd = "DVST" + String(startVal) + "\r";
-      Serial2.write(sendCmd.c_str());
-    }
+    String sendCmd = "";
+    if( loop_counter == 1 ) sendCmd = "DVDR" + String(directionVal) + "\r";
+    else if( loop_counter == 2 )  sendCmd = "DVCF" + String(operationVal) + "\r";
+    else if( loop_counter == 3 )  sendCmd = "DVSP" + String(SpeedVal) + "\r";
+    else if( loop_counter == 4 )  sendCmd = "DVSB" + String(standbyVal) + "\r";
+    else if( loop_counter == 5 )  sendCmd = "DVLG" + String(lightingVal) + "\r";
+    else if( loop_counter == 6 )  sendCmd = "DVAA" + String(aanVal) + "\r";
+    else if( loop_counter == 7 )  sendCmd = "DVST" + String(startVal) + "\r";
     else if( loop_counter == 8 ){
       if( is_near_distance_top == 1 )       instructionVal = 1;
       else if( is_near_distance_bot == 1 )  instructionVal = 2;
       else                                  instructionVal = 0;
       
-      String sendCmd = "DVIS" + String(instructionVal) + "\r";
-      Serial2.write(sendCmd.c_str());
+      sendCmd = "DVIS" + String(instructionVal) + "\r";
       loop_counter = 0; // カウンタのリセット
     }
+    Serial2.write(sendCmd.c_str());
+  }
+
+  // ★ 1000msごと：startValの立ち上がり検出処理
+  // 1秒間ONし、その後自動的にOFFにする
+  if (now - prev1000 >= 1000) {
+    prev1000 += 1000;
+
+    // startValの立ち上がり検出処理
+    // エス側で対策したくないので、こちらで実装
+    if (startVal == 1 && startVal_buf == 1) {
+      startVal = 0;
+    }
+    if (startVal == 2 && startVal_buf == 2) {
+      startVal = 0;
+    }
+    startVal_buf = startVal;
+
+    if( startVal2 == 1 && startVal2_buf == 1) {
+      startVal2 = 0;
+    }
+    if( startVal2 == 2 && startVal2_buf == 2) {
+      startVal2 = 0;
+    }
+    startVal2_buf = startVal2;
   }
 
   // ループ間隔（要求仕様）：1ms
