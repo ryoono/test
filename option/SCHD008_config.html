@@ -31,8 +31,6 @@
     }
     /* Style for send button to avoid confusion */
     #sendBtn { background-color: #2196F3 !important; }
-    /* Style for the stop button (same as start) */
-    #stopBtn { margin-left: 6px; }
     /* Explicit classes for start button to ensure coloring even when disabled */
     .start-enabled { background-color: #4CAF50 !important; color: white; }
     .start-disabled { background-color: #9E9E9E !important; color: white; }
@@ -125,8 +123,7 @@
 
     <div class="button-container">
       <button type="button" id="sendBtn">決定</button>
-      <button type="button" id="startBtn">起動</button>
-      <button type="button" id="stopBtn">停止</button>
+      <button type="button" id="startBtn">起動・停止</button>
     </div>
     <div class="button-container" style="justify-content:center; margin-top:8px;">
       <button id="debugToggleBtn" style="padding:8px 14px; border-radius:6px; background:#444; color:#fff; opacity:0.9;">デバッグ表示</button>
@@ -426,24 +423,6 @@
       }
       socket.send(msg);
       console.log("Sent (起動):", msg);
-    });
-
-    // 「停止」：表示中のみ stop='stop'、もう片方 'non'（未接近なら無効）
-    document.getElementById("stopBtn").addEventListener("click", () => {
-      const btn = document.getElementById("stopBtn");
-      if (btn.disabled) return; // 無効時は処理しない
-      // Build a filtered payload only for the current escalator
-      const payload = buildStartStopPayload({ action: 'stop' });
-      // No 'type' field in outgoing JSON (server expects no 'type')
-      console.log('Filtered payload (停止):', payload);
-      const msg = JSON.stringify(payload);
-      if (!socket || socket.readyState !== WebSocket.OPEN) {
-        console.warn('WebSocket is not open, cannot send.');
-        const s = document.getElementById('wsStatus'); if (s) s.textContent = 'WebSocket: not connected';
-        return;
-      }
-      socket.send(msg);
-      console.log("Sent (停止):", msg);
     });
 
     // 初期反映
