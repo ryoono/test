@@ -52,6 +52,8 @@ volatile bool i2cDataReceived = false; // I2Cデータ受信フラグ
 
 uint8_t tcp_cnt;
 String deviceName = ""; // 選択されたデバイス名（グローバル）
+String deviceIP = "";   // 選択された固定IPの文字列表現
+String deviceName = ""; // 選択されたデバイス名（グローバル）
 
 // I2C受信時の割り込みコールバック
 void receiveEvent(int howMany) {
@@ -121,6 +123,7 @@ void setup() {
     local_IP = IPAddress(192, 168, 4, 4); // ⑨
     deviceName = "u-Bot";
   }
+  deviceIP = local_IP.toString();
   IPAddress gateway(192, 168, 4, 1);
   IPAddress subnet(255, 255, 255, 0);
 
@@ -157,18 +160,21 @@ void setup() {
   Wire.begin(I2C_SLAVE_ADDR);
   Wire.onReceive(receiveEvent);
 
-  // 初期表示: 1行目にデバイス名、2行目にRSSI、3行目に閾値
+  // 初期表示: 1行目 デバイス名, 2行目 IP, 3行目 RSSI, 4行目 閾値
   M5.Lcd.clear();
   M5.Lcd.setTextSize(2);
+  int w = M5.Lcd.width();
   M5.Lcd.setCursor(0, 0);
   M5.Lcd.println(deviceName);
   M5.Lcd.setCursor(0, 40);
+  M5.Lcd.println(deviceIP);
+  M5.Lcd.setCursor(0, 80);
   if (receivedRSSI == 1) {
     M5.Lcd.println("No Connection");
   } else {
     M5.Lcd.printf("RSSI: %d", receivedRSSI);
   }
-  M5.Lcd.setCursor(0, 80);
+  M5.Lcd.setCursor(0, 120);
   M5.Lcd.printf("Threshold: %d", rssiThreshold);
   tcp_cnt = 0;
 }
@@ -191,18 +197,20 @@ void loop() {
   // I2Cデータ受信時の処理
   if (i2cDataReceived) {
     i2cDataReceived = false; // フラグをリセット
-    // 1行目: デバイス名、2行目: RSSI、3行目: 閾値
-    M5.Lcd.clear();
+    // 部分更新: デバイス名/IPはそのまま、RSSI行と閾値行のみ更新してチラつきを抑える
+    int w = M5.Lcd.width();
+    // RSSI行を消して再描画（領域だけ消す）
+    M5.Lcd.fillRect(0, 80, w, 40, TFT_BLACK);
     M5.Lcd.setTextSize(2);
-    M5.Lcd.setCursor(0, 0);
-    M5.Lcd.println(deviceName);
-    M5.Lcd.setCursor(0, 40);
+    M5.Lcd.setCursor(0, 80);
     if (receivedRSSI == 1) {
       M5.Lcd.println("No Connection");
     } else {
       M5.Lcd.printf("RSSI: %d", receivedRSSI);
     }
-    M5.Lcd.setCursor(0, 80);
+    // 閾値行も更新
+    M5.Lcd.fillRect(0, 120, w, 40, TFT_BLACK);
+    M5.Lcd.setCursor(0, 120);
     M5.Lcd.printf("Threshold: %d", rssiThreshold);
   }
 

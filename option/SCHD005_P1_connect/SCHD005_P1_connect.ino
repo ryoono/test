@@ -128,6 +128,9 @@ volatile bool i2cDataReceived = false; // I2Cデータ受信フラグ
 static unsigned long prev50  = 0;  // 50msごと（ボタン、7コマンド）
 static unsigned long prev250 = 0;  // 250msごと（TSZ）
 static unsigned long prev1000 = 0; // 1000msごと（startVal立ち上がり検出）
+// ★ 追加: TSZ 応答待ちフラグ（非ブロッキング）
+static bool tszPending = false;
+static unsigned long tszSentMillis = 0;
 
 // ★ 追加: WebSocketの購読先（どのページが開いているか）を記録
 static volatile int activeWsClient = -1; // 現在有効なクライアント番号（1台前提）
@@ -523,15 +526,21 @@ void loop() {
     }
   }
 
-  // ★ 250msごと：TSZ送受信（内部delay(30)はそのまま）
+  // ★ 250msごと：TSZ送信（非ブロッキング）
   unsigned long now = millis();
   if (now - prev250 >= 250) {
     prev250 += 250;
 
-    // シリアル通信でデータを送信
+    // まず TSZ を投げて応答待ちフラグを立てる（30ms 後に処理を行う）
     Serial2.write("TSZ\r");
     // Serial.println("Sent: TSZ\\r");  // デバッグ用に送信データを表示
-    delay(30);  // P1からの返信待ち(必要・既存通り)
+    tszPending = true;
+    tszSentMillis = now;
+  }
+
+  // TSZ 応答待ちフラグが立っていて、30ms 経過したら応答処理と broadcast を実行
+  if (tszPending && (now - tszSentMillis >= 30)) {
+    tszPending = false;
 
     if (Serial2.available() >= FRAME_LEN) {
       uint8_t buffer[FRAME_LEN];

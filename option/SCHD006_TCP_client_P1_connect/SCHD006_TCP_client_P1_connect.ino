@@ -88,6 +88,9 @@ uint8_t instructionVal = 0; // 0:none 1:top 2:bot
 static unsigned long prev250 = 0;  // TSZポーリング/状態送信
 static unsigned long prev50  = 0;  // DVコマンド送信
 static uint8_t       cmdPhase = 0; // 1..8 で巡回送信
+// TSZ 非ブロッキング用フラグ
+static bool tszPending = false;
+static unsigned long tszSentMillis = 0;
 
 // ========= ユーティリティ =========
 static inline void ensureTcpConnected() {
@@ -114,15 +117,19 @@ static inline void applyI2CToNearFlag() {
 }
 
 static inline void pollTSZ() {
-  // P1へ TSZ 要求
+  // This function no longer blocks; sending TSZ is handled separately.
+  // Kept for compatibility if needed elsewhere.
   Serial2.write("TSZ\r");
-  delay(30); // 応答待ち（既存仕様）
+  tszPending = true;
+  tszSentMillis = millis();
+}
+
+static inline void processTSZResponse() {
   if (Serial2.available() >= FRAME_LEN) {
     uint8_t buffer[FRAME_LEN];
     Serial2.readBytes(buffer, FRAME_LEN);
 
     // パース
-    // uint16_t preamble = (buffer[1] << 8) | buffer[0]; // 使わないが残しておくならコメントアウト
     stepSpeed          = (buffer[3] << 8) | buffer[2];
     handrailSpeedRight = (buffer[5] << 8) | buffer[4];
     handrailSpeedLeft  = (buffer[7] << 8) | buffer[6];
@@ -325,10 +332,17 @@ void loop() {
     Serial.printf("Assigned client %s\n", remoteIP.toString().c_str());
   }
 
-  // 250msごと：TSZ取得→状態行をホストへ送信
+  // 250msごと：TSZ送信（非ブロッキング）
   if (now - prev250 >= 250) {
     prev250 += 250;
+    // send TSZ and set pending flag
     pollTSZ();
+  }
+
+  // TSZ送信後、30ms 経過したら応答処理と状態送信を行う
+  if (tszPending && (now - tszSentMillis >= 30)) {
+    tszPending = false;
+    processTSZResponse();
     sendStateToHost();
     // TCP状態を軽く表示
     M5.Lcd.setCursor(8,106);
