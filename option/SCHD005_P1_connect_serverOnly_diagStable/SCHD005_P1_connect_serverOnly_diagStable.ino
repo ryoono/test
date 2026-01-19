@@ -71,7 +71,6 @@ IPAddress knownIP = IPAddress(192, 168, 4, 4);  // エスカレーター下部�
 IPAddress knownIP2 = IPAddress(192, 168, 4, 2); // サブエスカレーター(ZJ2)上部デバイス
 IPAddress knownIP3 = IPAddress(192, 168, 4, 3); // サブエスカレーター(ZJ2)下部デバイス
 
-static inline 
 /* ピンをここで定義します */
 /* モジュールの設定と同じにする必要があります */
 #define RX_PIN 13  // M5Stack Core2のRXピン
